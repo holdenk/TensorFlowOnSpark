@@ -36,8 +36,14 @@ def map_fun(args, ctx):
   tf_feed = TFNode.DataFeed(ctx.mgr, args.mode == "train")
 
   def rdd_generator():
+    c = 0
     while not tf_feed.should_stop():
-      batch = tf_feed.next_batch(1)[0]
+      c = c+1
+      next_batch = tf_feed.next_batch(1)
+      try:
+        batch = next_batch[0]
+      except Exception as e:
+        raise TypeError("Invalid next batch {0} -- {1} count {2}".format(next_batch, e, c))
       image = numpy.array(batch[0])
       image = image.astype(numpy.float32) / 255.0
       label = numpy.array(batch[1])

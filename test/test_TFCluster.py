@@ -57,6 +57,38 @@ class TFClusterTest(test.SparkTest):
     self.assertEqual(rdd_sum, sum( [x * x for x in range(1000)] ))
     cluster.shutdown()
 
+  def test_inputmode_spark_df(self):
+    """Distributed TF cluster w/ InputMode.SPARK"""
+    def _map_fun(args, ctx):
+      import tensorflow as tf
+      cluster, server = TFNode.start_cluster_server(ctx)
+      if ctx.job_name == "ps":
+        server.join()
+      elif ctx.job_name == "worker":
+        with tf.device(tf.train.replica_device_setter(
+          worker_device="/job:worker/task:%d" % ctx.task_index,
+          cluster=cluster)):
+          x = tf.placeholder(tf.int32, [None, 1])
+          sq = tf.square(x)
+          init_op = tf.global_variables_initializer()
+        sv = tf.train.Supervisor(is_chief=(ctx.task_index == 0),
+                                init_op=init_op)
+        with sv.managed_session(server.target) as sess:
+          tf_feed = TFNode.DataFeed(ctx.mgr, False)
+          while not sv.should_stop() and not tf_feed.should_stop():
+            outputs = sess.run([sq], feed_dict={ x: tf_feed.next_batch(10) })
+            tf_feed.batch_results(outputs[0])
+        sv.stop()
+
+    input = [ [x] for x in range(1000) ]    # set up input as tensors of shape [1] to match placeholder
+    rdd = self.session.parallelize(input, 10)
+    df = rdd.toDF()
+    cluster = TFCluster.run(self.sc, _map_fun, tf_args={}, num_executors=self.num_workers, num_ps=0, input_mode=TFCluster.InputMode.SPARK)
+    cluster.train(df)
+    rdd_sum = rdd_out.sum()
+    self.assertEqual(rdd_sum, sum( [x * x for x in range(1000)] ))
+    cluster.shutdown()
+
 
 if __name__ == '__main__':
   unittest.main()

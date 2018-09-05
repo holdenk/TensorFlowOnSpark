@@ -17,7 +17,13 @@ from datetime import datetime
 from tensorflowonspark import TFCluster
 import mnist_dist_dataset
 
-sc = SparkContext(conf=SparkConf().setAppName("mnist_spark"))
+conf = SparkConf()
+conf = conf.set("spark.jars.packages", "com.google.cloud.bigdataoss:gcs-connector-parent:1.8.1,com.google.cloud.bigdataoss:gcs-connector:1.8.1-hadoop2,org.tensorflow:tensorflow-hadoop:1.6.0")
+conf = conf.set("spark.jars.repositories", "http://kompics.sics.se/maven/repository/")
+conf = conf.setAppName("mnist_spark")
+conf = conf.set("master", "yarn-cluster")
+
+sc = SparkContext(conf=conf)
 executors = sc._conf.get("spark.executor.instances")
 num_executors = int(executors) if executors is not None else 1
 num_ps = 1
