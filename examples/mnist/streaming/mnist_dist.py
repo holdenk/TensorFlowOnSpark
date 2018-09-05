@@ -39,19 +39,23 @@ def map_fun(args, ctx):
   # Get TF cluster and server instances
   cluster, server = TFNode.start_cluster_server(ctx, 1, args.rdma)
 
-  def feed_dict(batch):
-    # Convert from [(images, labels)] to two numpy arrays of the proper type
-    images = []
-    labels = []
-    for item in batch:
-      images.append(item[0])
-      labels.append(item[1])
-    xs = numpy.array(images)
-    xs = xs.astype(numpy.float32)
-    xs = xs / 255.0
-    ys = numpy.array(labels)
-    ys = ys.astype(numpy.uint8)
-    return (xs, ys)
+  # Create generator for Spark data feed
+  tf_feed = TFNode.DataFeed(ctx.mgr, args.mode == "train")
+
+  def rdd_generator():
+    c = 0
+    while not tf_feed.should_stop():
+      c = c+1
+      next_batch = tf_feed.next_batch(1)
+      try:
+        batch = next_batch[0]
+      except Exception as e:
+        raise TypeError("Invalid next batch {0} -- {1} count {2}".format(next_batch, e, c))
+      image = numpy.array(batch[0])
+      image = image.astype(numpy.float32) / 255.0
+      label = numpy.array(batch[1])
+      label = label.astype(numpy.uint8)
+      yield (image, label)
 
   if job_name == "ps":
     server.join()

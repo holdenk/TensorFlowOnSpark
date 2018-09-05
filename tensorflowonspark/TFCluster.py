@@ -30,9 +30,12 @@ import sys
 import threading
 import time
 from pyspark.streaming import DStream
+from pyspark.sql import DataFrame
 from . import reservation
 from . import TFManager
 from . import TFSparkNode
+import pyarrow
+import pandas
 
 # status of TF background job
 tf_status = {}
@@ -81,6 +84,38 @@ class TFCluster(object):
     if isinstance(dataRDD, DStream):
       # Spark Streaming
       dataRDD.foreachRDD(lambda rdd: rdd.foreachPartition(TFSparkNode.train(self.cluster_info, self.cluster_meta, feed_timeout=feed_timeout, qname=qname)))
+    elif isinstance(dataRDD, DataFrame):
+      dataDF = dataRDD
+      dataDF.persist()
+      dataDF.count()
+      print("Working on ...")
+      print(dataDF.take(1)[0])
+      print("*****PANDA")
+      # DataFrame input switch to Arrow accelerated UDFs
+      from pyspark.sql.functions import pandas_udf, PandasUDFType
+      # Construct a pandas UDF with a ignored return
+      train_func = TFSparkNode.train(self.cluster_info, self.cluster_meta, qname)
+      @pandas_udf("int")
+      def do_train(inputSeries1, inputSeries2):
+        # Sad hack for now
+        modified_series = map(lambda x: (x[0], x[1]), zip(inputSeries1, inputSeries2))
+        if len(inputSeries1) == 0:
+          raise ValueError("Empty input")
+        train_func(modified_series)
+        return pandas.Series([0] * len(inputSeries1))
+      if num_epochs == 0:
+        num_epochs = 10
+      unionDF = dataDF
+      for i in range(num_epochs):
+        unionDF = unionDF.union(dataDF)
+      unionDF = unionDF.repartition(50)
+      columns = unionDF.columns
+      assert columns == ['_1', '_2'], "Expected columns {0} did not match {1}".format(columns, [])
+      print("Starting training")
+      countDF = unionDF.select(do_train(*columns))
+      countDF.cache()
+      count = countDF.count()
+      print("And done on {0}".format(count))
     else:
       # Spark RDD
       # if num_epochs unspecified, pick an arbitrarily "large" number for now
@@ -232,6 +267,7 @@ def run(sc, map_fun, tf_args, num_executors, num_ps, tensorboard=False, input_mo
     A TFCluster object representing the started cluster.
   """
   logging.info("Reserving TFSparkNodes {0}".format("w/ TensorBoard" if tensorboard else ""))
+  assert num_ps < num_executors, "Number of execotrs for ps nodes {0} is more (or equal to) than number of executors {1}!".format(num_ps, num_executors)
 
   if driver_ps_nodes and input_mode != InputMode.TENSORFLOW:
     raise Exception('running PS nodes on driver locally is only supported in InputMode.TENSORFLOW')
